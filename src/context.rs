@@ -261,6 +261,7 @@ impl Context {
             execution_directory,
             package_directory: self.package_directory.clone(),
             workspace_directory: self.workspace_root.clone(),
+            nature: self.nature,
             job,
             paths_to_watch,
             settings,

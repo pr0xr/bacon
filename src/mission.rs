@@ -17,6 +17,7 @@ pub struct Mission<'s> {
     pub execution_directory: PathBuf,
     pub package_directory: PathBuf,
     pub workspace_directory: Option<PathBuf>,
+    pub nature: ContextNature,
     pub job: Job,
     pub paths_to_watch: Vec<PathBuf>,
     pub settings: &'s Settings,
@@ -149,10 +150,20 @@ impl Mission<'_> {
             return Ok(command);
         }
 
+        let mut tokens = tokens.chain(&self.settings.additional_job_args);
+        if !self.handles_cargo_features() {
+            // the features settings are a cargo notion, another tool would
+            // choke on them, and a `--` separator must stay a plain argument
+            command.args(tokens);
+            command.current_dir(&self.execution_directory);
+            command.envs(envs);
+            debug!("command builder: {command:#?}");
+            return Ok(command);
+        }
+
         let mut no_default_features_done = false;
         let mut features_done = false;
         let mut last_is_features = false;
-        let mut tokens = tokens.chain(&self.settings.additional_job_args);
         let mut has_double_dash = false;
         for arg in tokens.by_ref() {
             if arg == "--" {
@@ -232,6 +243,21 @@ impl Mission<'_> {
         self.job.kill.clone()
     }
 
+    /// Whether the `--features`, `--all-features` and `--no-default-features`
+    /// settings must be injected into the job's command.
+    ///
+    /// Features are a cargo notion: `dotnet build --features x` is an error.
+    /// The command is still checked, so that a cargo job defined in a project
+    /// which isn't recognized as a cargo one keeps getting its features.
+    fn handles_cargo_features(&self) -> bool {
+        self.nature == ContextNature::Cargo
+            || self
+                .job
+                .command
+                .first()
+                .is_some_and(|program| program == "cargo")
+    }
+
     /// whether we need stdout and not just stderr
     pub fn need_stdout(&self) -> bool {
         self.job
@@ -283,4 +309,88 @@ fn merge_features(
         features.insert(feature);
     }
     features.iter().copied().collect::<Vec<&str>>().join(",")
+}
+
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn mission<'s>(
+        nature: ContextNature,
+        command: &[&str],
+        settings: &'s Settings,
+    ) -> Mission<'s> {
+        Mission {
+            location_name: "test".to_string(),
+            concrete_job_ref: ConcreteJobRef::from_job_name("job"),
+            execution_directory: PathBuf::from("."),
+            package_directory: PathBuf::from("."),
+            workspace_directory: None,
+            nature,
+            job: Job {
+                command: command.iter().map(|s| (*s).to_string()).collect(),
+                ..Default::default()
+            },
+            paths_to_watch: Vec::new(),
+            settings,
+        }
+    }
+
+    /// Return the arguments of the command built for the job
+    fn args(mission: &Mission) -> Vec<String> {
+        mission
+            .get_command()
+            .unwrap()
+            .build()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
+    }
+
+    /// A cargo project gets the features settings injected, as before.
+    #[test]
+    fn cargo_job_gets_the_features() {
+        let settings = Settings {
+            features: Some("foo".to_string()),
+            ..Default::default()
+        };
+        let mission = mission(ContextNature::Cargo, &["cargo", "check"], &settings);
+        assert_eq!(args(&mission), vec!["check", "--features", "foo"]);
+    }
+
+    /// `dotnet build --features foo` would be an error: the features settings
+    /// must not reach a command which knows nothing about them.
+    #[test]
+    fn dotnet_job_doesnt_get_the_features() {
+        let settings = Settings {
+            features: Some("foo".to_string()),
+            all_features: true,
+            ..Default::default()
+        };
+        let mission = mission(ContextNature::Csharp, &["dotnet", "build"], &settings);
+        assert_eq!(args(&mission), vec!["build"]);
+    }
+
+    /// A cargo job defined in a project which isn't recognized as a cargo one
+    /// (eg a directory having a bacon.toml but no Cargo.toml) keeps its
+    /// features.
+    #[test]
+    fn cargo_job_in_another_project_gets_the_features() {
+        let settings = Settings {
+            all_features: true,
+            ..Default::default()
+        };
+        let mission = mission(ContextNature::Other, &["cargo", "check"], &settings);
+        assert_eq!(args(&mission), vec!["check", "--all-features"]);
+    }
+
+    /// Without features settings, the command is passed through unchanged,
+    /// the `--` separator included.
+    #[test]
+    fn command_unchanged_without_features_settings() {
+        let settings = Settings::default();
+        let command = &["dotnet", "test", "--", "--filter", "MyTests"];
+        let mission = mission(ContextNature::Csharp, command, &settings);
+        assert_eq!(args(&mission), &command[1..]);
+    }
 }
