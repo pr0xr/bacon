@@ -301,12 +301,37 @@ mod csharp_analyzer_tests {
         assert_eq!(d.location.as_deref(), Some("Startup.cs:3"));
     }
 
+    /// Verbatim from `dotnet msbuild /tmp/nope.csproj` (Linux SDK 10.0.401).
     #[test]
     fn test_recognize_unlocated_msbuild_error() {
         let d = diag("MSBUILD : error MSB1009: Project file does not exist.").unwrap();
         assert_eq!(d.kind, Kind::Error);
         assert_eq!(d.location, None);
         assert_eq!(d.message, "MSB1009: Project file does not exist.");
+    }
+
+    /// `csc` invoked directly emits the same located format, with a relative
+    /// path and no `[project]` suffix. Verbatim from the Linux SDK image.
+    #[test]
+    fn test_csc_direct_invocation() {
+        let report = report_of(
+            r"Microsoft (R) Visual C# Compiler version 5.9.0-1.26423.113
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+app2/Program.cs(1,7): error CS0518: Predefined type 'System.Object' is not defined or imported
+app2/Program.cs(3,12): error CS0518: Predefined type 'System.Void' is not defined or imported",
+        );
+        assert_eq!(report.stats.errors, 2);
+        let locations: Vec<String> = report
+            .lines
+            .iter()
+            .filter(|line| line.line_type == LineType::Location)
+            .map(|line| line.content.to_raw())
+            .collect();
+        assert_eq!(
+            locations,
+            vec!["   --> app2/Program.cs:1:7", "   --> app2/Program.cs:3:12",]
+        );
     }
 
     #[test]
@@ -335,10 +360,23 @@ C:\tmp\cstest\Program.cs(6,34): error CS0103: The name 'missingThing' does not e
 Time Elapsed 00:00:03.45";
 
     fn report_of(output: &str) -> Report {
+        report_of_lines(output, TLine::from_raw)
+    }
+
+    /// Build a report going through bacon's real CSI-aware tty parser, so that
+    /// colored output is exercised the way it is in production.
+    fn report_of_tty(output: &str) -> Report {
+        report_of_lines(output, |l| TLine::from_tty(&l))
+    }
+
+    fn report_of_lines(
+        output: &str,
+        parse: impl Fn(String) -> TLine,
+    ) -> Report {
         let lines = output
             .lines()
             .map(|l| CommandOutputLine {
-                content: TLine::from_raw(l.to_string()),
+                content: parse(l.to_string()),
                 origin: CommandStream::StdOut,
             })
             .collect::<Vec<_>>();
@@ -582,5 +620,103 @@ Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration:
 Échoué!  - échec :     1, réussite :     0, ignorée(s) :     0, total :     1, durée : 23 ms - cs_nunit.dll (net10.0)",
         );
         assert_eq!(report.stats.test_fails, 0);
+    }
+
+    /// Verbatim `dotnet build` output from the `mcr.microsoft.com/dotnet/sdk:10.0`
+    /// Linux image: same format, but with unix paths.
+    const REAL_LINUX_BUILD_OUTPUT: &str = r"  Determining projects to restore...
+  All projects are up-to-date for restore.
+/tmp/app/Program.cs(6,34): error CS0103: The name 'missingThing' does not exist in the current context [/tmp/app/app.csproj]
+/tmp/app/Program.cs(5,13): warning CS0219: The variable 'unused' is assigned but its value is never used [/tmp/app/app.csproj]
+
+Build FAILED.
+
+/tmp/app/Program.cs(5,13): warning CS0219: The variable 'unused' is assigned but its value is never used [/tmp/app/app.csproj]
+/tmp/app/Program.cs(6,34): error CS0103: The name 'missingThing' does not exist in the current context [/tmp/app/app.csproj]
+    1 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:01.90";
+
+    #[test]
+    fn test_linux_build_unix_paths() {
+        let report = report_of(REAL_LINUX_BUILD_OUTPUT);
+        assert_eq!(report.stats.errors, 1);
+        assert_eq!(report.stats.warnings, 1);
+        let locations: Vec<String> = report
+            .lines
+            .iter()
+            .filter(|line| line.line_type == LineType::Location)
+            .map(|line| line.content.to_raw())
+            .collect();
+        assert_eq!(
+            locations,
+            vec![
+                "   --> /tmp/app/Program.cs:6:34",
+                "   --> /tmp/app/Program.cs:5:13",
+            ]
+        );
+    }
+
+    /// Verbatim colored output (`/clp:ForceConsoleColor`) from the Linux image.
+    /// MSBuild colors the whole diagnostic line, so the CSI sequences sit
+    /// around the part the analyzer matches.
+    #[test]
+    fn test_colored_build_output() {
+        let report = report_of_tty(
+            "\u{1b}[31;1m/tmp/app/Program.cs(6,34): error CS0103: The name 'missingThing' does not exist in the current context [/tmp/app/app.csproj]\n\u{1b}[m\u{1b}[33;1m/tmp/app/Program.cs(5,13): warning CS0219: The variable 'unused' is assigned but its value is never used [/tmp/app/app.csproj]\n\u{1b}[m",
+        );
+        assert_eq!(report.stats.errors, 1);
+        assert_eq!(report.stats.warnings, 1);
+    }
+
+    /// Verbatim Linux `dotnet test` output (xUnit), with unix stack paths.
+    #[test]
+    fn test_linux_dotnet_test_output() {
+        let report = report_of(
+            r"  Failed t.UnitTest1.ThrowingTest [1 ms]
+  Error Message:
+   System.InvalidOperationException : boom
+  Stack Trace:
+     at t.UnitTest1.ThrowingTest() in /tmp/t/UnitTest1.cs:line 12
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+  Failed t.UnitTest1.FailingEqualityTest [4 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 5
+Actual:   4
+  Stack Trace:
+     at t.UnitTest1.FailingEqualityTest() in /tmp/t/UnitTest1.cs:line 9
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+
+Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration: 28 ms - t.dll (net10.0)",
+        );
+        assert_eq!(report.stats.test_fails, 2);
+        let locations: Vec<String> = report
+            .lines
+            .iter()
+            .filter(|line| line.line_type == LineType::Location)
+            .map(|line| line.content.to_raw())
+            .collect();
+        assert_eq!(
+            locations,
+            vec![
+                "   --> /tmp/t/UnitTest1.cs:12",
+                "   --> /tmp/t/UnitTest1.cs:9",
+            ]
+        );
+    }
+
+    /// The MSBuild terminal logger (`--tl:on`) drops the `[project]` suffix and
+    /// indents diagnostics. It isn't bacon's default (the terminal logger is
+    /// off when stdout is a pipe, which is how bacon runs commands) but the
+    /// diagnostics themselves are still recognized if a user forces it on.
+    #[test]
+    fn test_terminal_logger_diagnostics() {
+        let report = report_of_tty(
+            "    /tmp/app/\u{1b}[1mProgram.cs\u{1b}[m(6,34): \u{1b}[31;1merror\u{1b}[m \u{1b}[31;1mCS0103\u{1b}[m: The name 'missingThing' does not exist in the current context\n    /tmp/app/\u{1b}[1mProgram.cs\u{1b}[m(5,13): \u{1b}[33;1mwarning\u{1b}[m \u{1b}[33;1mCS0219\u{1b}[m: The variable 'unused' is assigned but its value is never used",
+        );
+        assert_eq!(report.stats.errors, 1);
+        assert_eq!(report.stats.warnings, 1);
     }
 }

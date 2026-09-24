@@ -160,6 +160,17 @@ keywords the analyzer looks for won't match, so pin the language:
 env.DOTNET_CLI_UI_LANGUAGE = "en"
 ```
 
+## Notes
+
+The analyzer is verified against SDK 10.0.401 on both Windows and Linux, for
+`dotnet build`, `dotnet test` (xUnit, NUnit and MSTest), `dotnet msbuild` and
+`csc`, with and without colors.
+
+MSBuild's *terminal logger* (`--tl:on`) redraws lines with cursor-control
+escape sequences, which makes for noisy output in bacon. It is disabled when
+stdout is a pipe, which is how bacon runs commands, so you normally get the
+classic console logger. Don't force it on.
+
 If your terminal doesn't get colors from the .NET CLI, add
 
 ```TOML
