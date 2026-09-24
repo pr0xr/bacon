@@ -144,6 +144,17 @@ impl IgnorerSet {
     }
 }
 
+#[cfg(test)]
+/// Join a root and a relative pattern the way `expand_patterns` does, ie with
+/// the separator of the platform: on Windows the result holds a backslash,
+/// which glob takes for a separator just like a slash.
+fn joined(
+    root: &str,
+    rest: &str,
+) -> String {
+    Path::new(root).join(rest).to_string_lossy().to_string()
+}
+
 #[test]
 fn test_expand_patterns() {
     assert_eq!(
@@ -157,8 +168,8 @@ fn test_expand_patterns() {
     assert_eq!(
         expand_patterns("/foo", Path::new("/root")),
         vec![
-            "/root/foo/**".to_string(),
-            "/root/foo".to_string(),
+            format!("{}/**", joined("/root", "foo")),
+            joined("/root", "foo"),
             "/foo/**".to_string(),
             "/foo".to_string(),
         ]
@@ -173,10 +184,23 @@ fn test_expand_patterns() {
     );
     assert_eq!(
         expand_patterns("/foo/bar/*", Path::new("/root")),
-        vec!["/root/foo/bar/*".to_string(), "/foo/bar/*".to_string(),]
+        vec![joined("/root", "foo/bar/*"), "/foo/bar/*".to_string(),]
     );
     assert_eq!(
         expand_patterns("foo/**/bar/*", Path::new("/root")),
         vec!["**/foo/**/bar/*".to_string(),]
+    );
+}
+
+/// Whatever the separator used in the pattern, a path under the root must be
+/// matched: glob takes a backslash for a separator on Windows.
+#[test]
+fn test_root_relative_pattern_matches() {
+    let root = Path::new("/root");
+    let patterns = build_glob_patterns("/foo", root).unwrap();
+    let path = root.join("foo").join("bar.rs");
+    assert!(
+        patterns.iter().any(|p| p.matches_path(&path)),
+        "{path:?} should be matched by {patterns:?}",
     );
 }
