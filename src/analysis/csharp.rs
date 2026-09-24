@@ -719,4 +719,41 @@ Failed!  - Failed:     2, Passed:     1, Skipped:     0, Total:     3, Duration:
         assert_eq!(report.stats.errors, 1);
         assert_eq!(report.stats.warnings, 1);
     }
+
+    /// The output format is unchanged across SDK 8.0.425, 9.0.318 and
+    /// 10.0.401. The one difference is the reflection frame under the test:
+    /// SDK 8 and 9 use `System.RuntimeMethodHandle.InvokeMethod` where SDK 10
+    /// uses `System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method`.
+    /// Both are filtered out by the `System.` prefix, so the location stays on
+    /// the test itself. Verbatim SDK 8 output.
+    #[test]
+    fn test_sdk8_reflection_frame_variant() {
+        let report = report_of(
+            r"  Failed t.UnitTest1.ThrowingTest [1 ms]
+  Error Message:
+   System.InvalidOperationException : boom
+  Stack Trace:
+     at t.UnitTest1.ThrowingTest() in /tmp/t/UnitTest1.cs:line 12
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+
+Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 3 ms - t.dll (net8.0)",
+        );
+        assert_eq!(report.stats.test_fails, 1);
+        let locations: Vec<String> = report
+            .lines
+            .iter()
+            .filter(|line| line.line_type == LineType::Location)
+            .map(|line| line.content.to_raw())
+            .collect();
+        assert_eq!(locations, vec!["   --> /tmp/t/UnitTest1.cs:12"]);
+    }
+
+    /// SDK 8 and 9 print a version banner before `dotnet msbuild` diagnostics.
+    /// It must not be taken for one.
+    #[test]
+    fn test_msbuild_version_banner_is_not_a_diagnostic() {
+        assert!(diag("MSBuild version 17.11.48+02bf66295 for .NET").is_none());
+        assert!(diag("Switch: /tmp/nope.csproj").is_none());
+    }
 }

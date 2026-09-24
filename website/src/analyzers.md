@@ -162,9 +162,9 @@ env.DOTNET_CLI_UI_LANGUAGE = "en"
 
 ## Notes
 
-The analyzer is verified against SDK 10.0.401 on both Windows and Linux, for
-`dotnet build`, `dotnet test` (xUnit, NUnit and MSTest), `dotnet msbuild` and
-`csc`, with and without colors.
+The analyzer is verified against SDK 8.0.425, 9.0.318 and 10.0.401, on both
+Windows and Linux, for `dotnet build`, `dotnet test` (xUnit, NUnit and MSTest),
+`dotnet msbuild` and `csc`, with and without colors.
 
 MSBuild's *terminal logger* (`--tl:on`) redraws lines with cursor-control
 escape sequences, which makes for noisy output in bacon. It is disabled when
