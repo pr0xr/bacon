@@ -1,4 +1,5 @@
 ### next
+- new `csharp` analyzer, for `dotnet build`, `dotnet test` and `msbuild`
 - fix a file (eg `build.rs`) not being watched anymore after an editor saved it by replacement - Fix #243
 - fewer redraws when the command outputs many lines
 - custom sounds, declared in a `sounds` map - Fix #337

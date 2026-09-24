@@ -15,6 +15,7 @@ Analyzer | Languages | Tool
 [nextest](#nextest)| Rust |  [cargo-nextest](https://nexte.st/)
 [cpp](#gcc-clang)| C++ |  Clang and GCC
 cpp_doctest| C++ |  [doctest](https://github.com/doctest/doctest).
+[csharp](#dotnet-build)| C# |  [.NET](https://dotnet.microsoft.com/) `dotnet build`, `dotnet test`, `msbuild`
 [biome](#biome)| JS/TS/CSS |  [Biome](https://biomejs.dev/)
 [eslint](#eslint)| JS/TS/CSS |  [ESLint](https://eslint.org/)
 [go](#go-build) | Go | [go](https://go.dev/)
@@ -104,6 +105,38 @@ command = [
 watch = ["src"]
 need_stdout = true
 analyzer = "cpp"
+```
+
+# C#
+
+## dotnet build
+
+**Status: <span style="background-color:orange;color:white;padding:3px">young</span>**
+
+The `csharp` analyzer reads the canonical MSBuild diagnostic format, so it works
+with `dotnet build`, `dotnet test`, `msbuild` and `csc`.
+
+Example configuration:
+
+```TOML
+[jobs.build]
+command = [
+    "dotnet", "build",
+    "--nologo",
+    "-consoleLoggerParameters:NoSummary",
+]
+need_stdout = true
+analyzer = "csharp"
+watch = ["."]
+```
+
+The trailing `[/path/to/project.csproj]` that MSBuild appends to every
+diagnostic is removed from the item titles.
+
+If your terminal doesn't get colors from the .NET CLI, add
+
+```TOML
+env.DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION = "1"
 ```
 
 # Go

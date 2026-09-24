@@ -322,6 +322,7 @@
         "cargo_json",
         "cpp",
         "cpp_doctest",
+        "csharp",
         "eslint",
         "go",
         "nextest",

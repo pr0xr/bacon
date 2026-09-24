@@ -2,6 +2,7 @@ mod analyzer;
 mod biome;
 mod cargo_json;
 mod cpp;
+mod csharp;
 mod eslint;
 mod go;
 mod item_accumulator;
