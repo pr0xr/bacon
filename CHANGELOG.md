@@ -2,6 +2,7 @@
 - new `csharp` analyzer, for `dotnet build`, `dotnet test` and `msbuild`
 - C# projects and solutions are auto-detected: in a directory holding a `*.sln`, `*.slnx` or `*.csproj` file, bacon defaults to `dotnet` jobs and `bacon --init` writes a C# configuration
 - the `--features`, `--all-features` and `--no-default-features` settings are no longer appended to the commands of non cargo jobs
+- fix cargo diagnostics not being recognized at all on Windows when rustc falls back to the bright 4 bit colors: errors, warnings and locations were all missed, bacon showing just the command error code
 - fix exported locations being unusable on Windows: the drive letter of an absolute path was taken for the line number
 - fix the `{message}` of an exported location being empty for all the analyzers building their titles internally (`csharp`, `go`, `python`, `nextest`, ...)
 - fix a file (eg `build.rs`) not being watched anymore after an editor saved it by replacement - Fix #243

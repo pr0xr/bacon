@@ -3,10 +3,16 @@ use {
     lazy_regex::*,
 };
 
+/// Whether the CSI is the one rustc uses for the body of a diagnostic title,
+/// ie what follows `error` or `warning`
 #[cfg(not(windows))]
-const CSI_ERROR_BODY: &str = CSI_BOLD;
+fn is_error_body(csi: &str) -> bool {
+    csi == CSI_BOLD
+}
 #[cfg(windows)]
-const CSI_ERROR_BODY: &str = CSI_BOLD_WHITE;
+fn is_error_body(csi: &str) -> bool {
+    csi == CSI_BOLD_WHITE || csi == CSI_BOLD_4BIT_WHITE
+}
 
 #[derive(Debug, Default)]
 pub struct StandardLineAnalyzer;
@@ -80,13 +86,13 @@ fn analyze_line(cmd_line: &CommandOutputLine) -> LineAnalysis {
                     body.csi.as_ref(),
                     body.raw.as_ref(),
                 ) {
-                    (CSI_BOLD_RED | CSI_BOLD_4BIT_RED, "error", CSI_ERROR_BODY, body_raw)
-                        if body_raw.starts_with(": aborting due to") =>
+                    (CSI_BOLD_RED | CSI_BOLD_4BIT_RED, "error", body_csi, body_raw)
+                        if is_error_body(body_csi) && body_raw.starts_with(": aborting due to") =>
                     {
                         LineType::Title(Kind::Sum)
                     }
-                    (CSI_BOLD_RED | CSI_BOLD_4BIT_RED, title_raw, CSI_ERROR_BODY, _)
-                        if title_raw.starts_with("error") =>
+                    (CSI_BOLD_RED | CSI_BOLD_4BIT_RED, title_raw, body_csi, _)
+                        if title_raw.starts_with("error") && is_error_body(body_csi) =>
                     {
                         LineType::Title(Kind::Error)
                     }
@@ -95,19 +101,24 @@ fn analyze_line(cmd_line: &CommandOutputLine) -> LineAnalysis {
                         determine_warning_type(body_raw, content)
                     }
                     #[cfg(windows)]
-                    (CSI_BOLD_YELLOW | CSI_BOLD_4BIT_YELLOW, "warning", _, body_raw) => {
-                        determine_warning_type(body_raw, content)
-                    }
-                    ("", title_raw, CSI_BOLD_BLUE | CSI_BOLD_4BIT_BLUE, "--> ")
-                        if is_spaces(title_raw) =>
-                    {
-                        LineType::Location
-                    }
-                    ("", title_raw, CSI_BOLD_BLUE | CSI_BOLD_4BIT_BLUE, "::: ")
-                        if is_spaces(title_raw) =>
-                    {
-                        LineType::Location
-                    }
+                    (
+                        CSI_BOLD_YELLOW | CSI_BOLD_4BIT_YELLOW | CSI_BOLD_4BIT_BRIGHT_YELLOW,
+                        "warning",
+                        _,
+                        body_raw,
+                    ) => determine_warning_type(body_raw, content),
+                    (
+                        "",
+                        title_raw,
+                        CSI_BOLD_BLUE | CSI_BOLD_4BIT_BLUE | CSI_BOLD_4BIT_CYAN,
+                        "--> ",
+                    ) if is_spaces(title_raw) => LineType::Location,
+                    (
+                        "",
+                        title_raw,
+                        CSI_BOLD_BLUE | CSI_BOLD_4BIT_BLUE | CSI_BOLD_4BIT_CYAN,
+                        "::: ",
+                    ) if is_spaces(title_raw) => LineType::Location,
                     ("", k, CSI_BOLD_RED | CSI_RED, "FAILED") if content.strings.len() == 2 => {
                         if let Some(k) = as_test_name(k) {
                             key = Some(k.to_string());
@@ -226,4 +237,78 @@ fn as_test_stdout_title(s: &str) -> Option<&str> {
 /// thread 'key' has overflowed its stack
 fn as_stack_overflow_message(s: &str) -> Option<&str> {
     regex_captures!("^thread '(.+)' has overflowed its stack$", s).map(|(_, key)| key)
+}
+
+#[cfg(test)]
+mod standard_line_analyzer_tests {
+    use super::*;
+
+    fn line_type(
+        raw: &str,
+        origin: CommandStream,
+    ) -> LineType {
+        let cmd_line = CommandOutputLine {
+            content: TLine::from_tty(raw),
+            origin,
+        };
+        analyze_line(&cmd_line).line_type
+    }
+
+    /// Output of `cargo check` on Windows, captured from a real run: rustc
+    /// hasn't got the 256 colors there and falls back to the bright 4 bit
+    /// ones, `93` for the warning, `97` for the body, `96` for the arrow.
+    ///
+    /// Before those were recognized, nothing at all was analyzed on Windows:
+    /// no title, no location, hence no exported location either.
+    #[cfg(windows)]
+    #[test]
+    fn recognize_bright_4bit_rustc_diagnostics() {
+        assert_eq!(
+            line_type(
+                "\u{1b}[1m\u{1b}[93mwarning\u{1b}[0m\u{1b}[1m\u{1b}[97m: unused variable: `x`\u{1b}[0m",
+                CommandStream::StdErr,
+            ),
+            LineType::Title(Kind::Warning),
+        );
+        assert_eq!(
+            line_type(
+                "\u{1b}[1m\u{1b}[91merror\u{1b}[0m\u{1b}[1m\u{1b}[97m: mismatched types\u{1b}[0m",
+                CommandStream::StdErr,
+            ),
+            LineType::Title(Kind::Error),
+        );
+        assert_eq!(
+            line_type(
+                " \u{1b}[1m\u{1b}[96m--> \u{1b}[0msrc\\main.rs:1:17",
+                CommandStream::StdErr,
+            ),
+            LineType::Location,
+        );
+    }
+
+    /// The 256 colors variants, used when the terminal supports them, must
+    /// keep being recognized.
+    #[test]
+    fn recognize_256_colors_rustc_diagnostics() {
+        let arrow = format!(" {CSI_BOLD_BLUE}--> {CSI_RESET}src/main.rs:1:17");
+        assert_eq!(line_type(&arrow, CommandStream::StdErr), LineType::Location);
+        let arrow = format!(" {CSI_BOLD_4BIT_BLUE}--> {CSI_RESET}src/main.rs:1:17");
+        assert_eq!(line_type(&arrow, CommandStream::StdErr), LineType::Location);
+    }
+
+    /// A summary line must not be taken for an error.
+    #[test]
+    fn aborting_summary_isnt_an_error() {
+        #[cfg(windows)]
+        let body = CSI_BOLD_4BIT_WHITE;
+        #[cfg(not(windows))]
+        let body = CSI_BOLD;
+        let raw = format!(
+            "{CSI_BOLD_4BIT_RED}error{CSI_RESET}{body}: aborting due to 1 previous error{CSI_RESET}"
+        );
+        assert_eq!(
+            line_type(&raw, CommandStream::StdErr),
+            LineType::Title(Kind::Sum),
+        );
+    }
 }

@@ -29,6 +29,16 @@ pub const CSI_BOLD_BLUE: &str = "\u{1b}[1m\u{1b}[38;5;14m";
 pub const CSI_BOLD_BLUE: &str = "\u{1b}[1m\u{1b}[38;5;12m";
 pub const CSI_BOLD_4BIT_BLUE: &str = "\u{1b}[1m\u{1b}[94m";
 
+// rustc doesn't always have the 256 colors available: depending on the
+// terminal it may fall back to the bright 4 bit colors, which is what it
+// does on Windows. They're the ones it then uses for the `-->` of a
+// location, the `warning` of a title, and the body of a diagnostic.
+pub const CSI_BOLD_4BIT_CYAN: &str = "\u{1b}[1m\u{1b}[96m";
+#[cfg(windows)]
+pub const CSI_BOLD_4BIT_BRIGHT_YELLOW: &str = "\u{1b}[1m\u{1b}[93m";
+#[cfg(windows)]
+pub const CSI_BOLD_4BIT_WHITE: &str = "\u{1b}[1m\u{1b}[97m";
+
 #[cfg(windows)]
 pub const CSI_BOLD_4BIT_YELLOW: &str = "\u{1b}[1m\u{1b}[33m";
 
