@@ -104,8 +104,8 @@ impl Config {
         Ok(conf)
     }
     #[allow(clippy::missing_panics_doc)] // unit test ensure this passes
-    pub fn default_package_config() -> Self {
-        toml::from_str(DEFAULT_PACKAGE_CONFIG).unwrap()
+    pub fn default_package_config(nature: ContextNature) -> Self {
+        toml::from_str(default_package_config_str(nature)).unwrap()
     }
     #[allow(clippy::missing_panics_doc)] // unit test ensure this passes
     pub fn default_prefs() -> Self {
@@ -115,8 +115,14 @@ impl Config {
 
 #[test]
 fn test_default_files() {
-    let mut settings = Settings::default();
-    settings.apply_config(&Config::default_prefs());
-    settings.apply_config(&Config::default_package_config());
-    settings.check().unwrap();
+    for nature in [
+        ContextNature::Cargo,
+        ContextNature::Csharp,
+        ContextNature::Other,
+    ] {
+        let mut settings = Settings::default();
+        settings.apply_config(&Config::default_prefs());
+        settings.apply_config(&Config::default_package_config(nature));
+        settings.check().unwrap();
+    }
 }

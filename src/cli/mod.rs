@@ -91,7 +91,8 @@ pub fn run() -> anyhow::Result<()> {
     if args.init {
         let package_config_path = context.package_config_path();
         if !package_config_path.exists() {
-            fs::write(&package_config_path, DEFAULT_PACKAGE_CONFIG.trim_start())?;
+            let content = default_package_config_str(context.nature);
+            fs::write(&package_config_path, content.trim_start())?;
             eprintln!("bacon project configuration file written.");
         } else {
             eprintln!("bacon configuration file already exists.");

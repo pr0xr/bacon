@@ -83,7 +83,7 @@ impl Settings {
     ) -> Result<Self> {
         let mut settings = Settings::default();
 
-        let default_package_config = Config::default_package_config();
+        let default_package_config = Config::default_package_config(context.nature);
         settings.apply_config(&default_package_config);
 
         let paths = vec![

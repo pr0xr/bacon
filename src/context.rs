@@ -9,6 +9,7 @@ use {
     std::{
         env,
         fmt,
+        fs,
         path::{
             Path,
             PathBuf,
@@ -16,7 +17,7 @@ use {
     },
 };
 
-static DEFAULT_WATCHES: &[&str] = &[
+static CARGO_DEFAULT_WATCHES: &[&str] = &[
     "Cargo.toml",
     "src",
     "tests",
@@ -24,6 +25,48 @@ static DEFAULT_WATCHES: &[&str] = &[
     "examples",
     "build.rs",
 ];
+
+/// A C# project has no imposed layout: the sources may sit anywhere below the
+/// solution or project directory. So we watch the whole directory and rely on
+/// gitignore to skip `bin` and `obj`, and we explicitly list the MSBuild files
+/// which are usually at the root.
+static CSHARP_DEFAULT_WATCHES: &[&str] = &[
+    ".",
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+];
+
+fn default_watches(nature: ContextNature) -> &'static [&'static str] {
+    match nature {
+        ContextNature::Csharp => CSHARP_DEFAULT_WATCHES,
+        // projects of unrecognized nature keep the historical, cargo shaped,
+        // list of watches: it's mostly harmless as missing paths are skipped
+        ContextNature::Cargo | ContextNature::Other => CARGO_DEFAULT_WATCHES,
+    }
+}
+
+/// The file extensions which make a directory a C# project or solution
+/// directory. `.slnx` is the XML solution format of SDK 9.0.200+.
+static CSHARP_PROJECT_EXTENSIONS: &[&str] = &["sln", "slnx", "csproj"];
+
+/// Whether the directory directly contains a `*.sln`, `*.slnx` or `*.csproj` file
+fn is_csharp_directory(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| {
+                CSHARP_PROJECT_EXTENSIONS
+                    .iter()
+                    .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+            })
+            && path.is_file()
+    })
+}
 
 /// information on the paths which are relevant for a mission
 #[derive(Debug)]
@@ -76,9 +119,12 @@ impl Context {
         // A cargo project is one directly containing a Cargo.toml file.
         // When the project is a Cargo project, some additional rules apply and
         // the Cargo.toml file(s) is/are used to determine the paths to watch.
+        // A C# project or solution directory is recognized by its MSBuild files.
         let mut cargo_toml_file = package_directory.join("Cargo.toml");
         let nature = if cargo_toml_file.exists() && cargo_toml_file.is_file() {
             ContextNature::Cargo
+        } else if is_csharp_directory(&package_directory) {
+            ContextNature::Csharp
         } else {
             ContextNature::Other
         };
@@ -153,7 +199,7 @@ impl Context {
             }
             let add_default = job.default_watch.unwrap_or(true);
             if add_default {
-                for watch in DEFAULT_WATCHES {
+                for watch in default_watches(self.nature) {
                     if !watches.contains(watch) {
                         watches.push(watch);
                     }
@@ -282,7 +328,8 @@ fn build_script_paths(targets: &[cargo_metadata::Target]) -> Vec<PathBuf> {
 }
 
 /// The "package directory", unless specified with --project, is the closest
-/// bacon.toml or Cargo.toml directory, or the current directory if none is found.
+/// directory holding a project file (bacon.toml, Cargo.toml, or a C# project
+/// or solution file), or the current directory if none is found.
 fn find_package_directory(args: &Args) -> Result<PathBuf> {
     if let Some(dir) = args.project.as_ref() {
         let path = PathBuf::from(dir);
@@ -292,11 +339,11 @@ fn find_package_directory(args: &Args) -> Result<PathBuf> {
         return Ok(path);
     }
     let base_dir = env::current_dir().unwrap();
-    let package_directory = closest_bacon_or_cargo_dir(&base_dir).unwrap_or(base_dir);
+    let package_directory = closest_project_dir(&base_dir).unwrap_or(base_dir);
     Ok(package_directory)
 }
 
-fn closest_bacon_or_cargo_dir(start_path: &Path) -> Option<PathBuf> {
+fn closest_project_dir(start_path: &Path) -> Option<PathBuf> {
     let mut current_path = start_path;
     loop {
         let bacon_toml = current_path.join("bacon.toml");
@@ -305,6 +352,9 @@ fn closest_bacon_or_cargo_dir(start_path: &Path) -> Option<PathBuf> {
         }
         let cargo_toml = current_path.join("Cargo.toml");
         if cargo_toml.exists() && cargo_toml.is_file() {
+            return Some(current_path.to_path_buf());
+        }
+        if is_csharp_directory(current_path) {
             return Some(current_path.to_path_buf());
         }
         if let Some(parent) = current_path.parent() {
@@ -349,5 +399,70 @@ mod tests {
             ]"#,
         );
         assert!(build_script_paths(&targets).is_empty());
+    }
+
+    /// Create a temporary directory holding the given (empty) files, run the
+    /// test body on it, then remove it.
+    fn with_dir<F: FnOnce(&Path)>(
+        test_name: &str,
+        files: &[&str],
+        f: F,
+    ) {
+        let dir = env::temp_dir().join(format!("bacon-test-{test_name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            let path = dir.join(file);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&path, "").unwrap();
+        }
+        f(&dir);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn csharp_directory_recognized_by_project_and_solution_files() {
+        for file in ["App.csproj", "App.sln", "App.slnx", "APP.CSPROJ"] {
+            with_dir("csharp-detect", &[file], |dir| {
+                assert!(is_csharp_directory(dir), "{file} should mark a C# project");
+            });
+        }
+    }
+
+    /// Files which only look like C# ones, and directories with the right
+    /// extension, must not be taken for a C# project.
+    #[test]
+    fn non_csharp_directory_not_recognized() {
+        with_dir("csharp-no-detect", &["Cargo.toml", "src/main.rs"], |dir| {
+            assert!(!is_csharp_directory(dir));
+            fs::create_dir_all(dir.join("decoy.csproj")).unwrap();
+            assert!(
+                !is_csharp_directory(dir),
+                "a directory isn't a project file"
+            );
+        });
+    }
+
+    /// Launched from a sub-directory of a C# project, bacon must find the
+    /// project directory instead of walking up to the filesystem root.
+    #[test]
+    fn closest_project_dir_finds_csharp_project() {
+        with_dir(
+            "csharp-walk-up",
+            &["App.csproj", "Controllers/Api/Home.cs"],
+            |dir| {
+                let deep = dir.join("Controllers/Api");
+                assert_eq!(closest_project_dir(&deep), Some(dir.to_path_buf()));
+            },
+        );
+    }
+
+    /// The default watches must fit the nature of the project.
+    #[test]
+    fn csharp_default_watches() {
+        assert!(default_watches(ContextNature::Csharp).contains(&"."));
+        assert!(default_watches(ContextNature::Cargo).contains(&"Cargo.toml"));
     }
 }

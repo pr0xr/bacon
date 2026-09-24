@@ -3,5 +3,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextNature {
     Cargo,
+    Csharp,
     Other,
 }

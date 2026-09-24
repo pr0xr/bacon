@@ -109,6 +109,13 @@ analyzer = "cpp"
 
 # C#
 
+Bacon recognizes a C# project by the presence of a `*.sln`, `*.slnx` or
+`*.csproj` file in the project directory. In such a directory it uses `dotnet`
+jobs (`build`, `test`, `restore`, `format`, `run`, `run-long`) with the
+`csharp` analyzer instead of the cargo ones, and `bacon --init` writes a C#
+flavored `bacon.toml`. Everything below is what those default jobs do; you only
+need to write them yourself if you want to change them.
+
 ## dotnet build
 
 **Status: <span style="background-color:orange;color:white;padding:3px">young</span>**
@@ -154,7 +161,8 @@ your own code: frameworks such as MSTest push several of their own frames on
 top of the trace, and those are skipped.
 
 The .NET CLI localizes its output. If your system isn't in English, the
-keywords the analyzer looks for won't match, so pin the language:
+keywords the analyzer looks for won't match, so the language must be pinned
+(the default C# configuration already does it):
 
 ```TOML
 env.DOTNET_CLI_UI_LANGUAGE = "en"

@@ -1,0 +1,81 @@
+#:schema https://dystroy.org/bacon/.bacon.schema.json
+
+# This is a configuration file for the bacon tool
+#
+# Complete help on configuration: https://dystroy.org/bacon/config/
+#
+# You may check the current default at
+#   https://github.com/Canop/bacon/blob/main/defaults/default-bacon-csharp.toml
+
+default_job = "build"
+
+# The .NET CLI localizes its output, and the analyzer looks for English
+# keywords, so the language is pinned here.
+env.DOTNET_CLI_UI_LANGUAGE = "en"
+# Without this, the .NET CLI drops the colors when its output is a pipe,
+# which is how bacon runs commands.
+env.DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION = "1"
+
+[jobs.build]
+command = ["dotnet", "build", "--nologo"]
+need_stdout = true
+analyzer = "csharp"
+
+# This job lets you run
+# - all tests: bacon test
+# - a filtered subset: bacon test -- --filter MyNamespace.MyTests
+[jobs.test]
+command = ["dotnet", "test", "--nologo"]
+need_stdout = true
+analyzer = "csharp"
+
+# Restore isn't needed on every change, but it's handy on a key
+[jobs.restore]
+command = ["dotnet", "restore"]
+need_stdout = true
+analyzer = "csharp"
+on_success = "back"
+
+[jobs.format]
+command = ["dotnet", "format", "--verify-no-changes"]
+need_stdout = true
+
+# You can run your application and have the result displayed in bacon,
+# if it makes sense for this project.
+[jobs.run]
+command = [
+    "dotnet", "run",
+    # put launch parameters for your program behind a `--` separator
+]
+need_stdout = true
+analyzer = "csharp"
+allow_warnings = true
+background = true
+show_command_error_code = true
+scroll_anchor = "auto"
+
+# Run your long-running application (eg server) and have the result displayed
+# in bacon. For programs that never stop, `background` is set to false to have
+# the output immediately displayed instead of waiting for the program's end,
+# and the program is restarted on every change.
+[jobs.run-long]
+command = [
+    "dotnet", "run",
+    # put launch parameters for your program behind a `--` separator
+]
+need_stdout = true
+analyzer = "csharp"
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+# kill = ["pkill", "-TERM", "-P"]
+scroll_anchor = "auto"
+
+# You may define here keybindings that would be specific to
+# a project, for example a shortcut to launch a specific job.
+# Shortcuts to internal functions (scrolling, toggling, etc.)
+# should go in your personal global prefs.toml file instead.
+# Note that 't' and 'r' are bound by default to the 'test' and 'run'
+# jobs defined above.
+[keybindings]
+# alt-m = "job:my-job"
