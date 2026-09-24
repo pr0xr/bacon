@@ -206,9 +206,7 @@ impl Report {
             let Some(location) = line.location() else {
                 continue;
             };
-            let (_, path, file_line, mut file_column) =
-                regex_captures!(r#"^([^:\s]+):(\d+)(?:\:(\d+))?$"#, location)
-                    .unwrap_or(("", location, "", ""));
+            let (path, file_line, mut file_column) = split_location(location);
             // we need to make sure the path is absolute
             let path_buf = PathBuf::from(path);
             let path_buf = mission.make_absolute(path_buf);
@@ -233,7 +231,7 @@ impl Report {
                     "job" => &job_name,
                     "kind" => last_kind,
                     "line" => file_line,
-                    "message" => message.unwrap_or(""),
+                    "message" => message.as_deref().unwrap_or(""),
                     "path" => &path,
                     _ => {
                         debug!("unknown export key: {key:?}");
@@ -248,5 +246,66 @@ impl Report {
     }
     pub fn can_scope_tests(&self) -> bool {
         self.has_passed_tests && self.stats.test_fails > 0
+    }
+}
+
+/// Split a location into its path, line and column parts, the line and column
+/// being empty when they're not in the location.
+///
+/// The path is matched lazily so that the colon of a Windows drive
+/// (`C:\src\main.cs:3:5`) isn't taken for the line separator, and so that a
+/// path containing spaces isn't rejected.
+fn split_location(location: &str) -> (&str, &str, &str) {
+    match regex_captures!(r#"^(.+?):(\d+)(?::(\d+))?$"#, location) {
+        Some((_, path, line, column)) => (path, line, column),
+        None => (location, "", ""),
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn split_unix_location() {
+        assert_eq!(
+            split_location("src/main.rs:12:5"),
+            ("src/main.rs", "12", "5")
+        );
+        assert_eq!(split_location("src/main.rs:12"), ("src/main.rs", "12", ""));
+    }
+
+    /// The drive colon of an absolute Windows path must not be taken for the
+    /// line separator. MSBuild, hence the csharp analyzer, emits such paths.
+    #[test]
+    fn split_windows_location() {
+        assert_eq!(
+            split_location(r"C:\proj\Program.cs:1:9"),
+            (r"C:\proj\Program.cs", "1", "9"),
+        );
+        assert_eq!(
+            split_location(r"C:\proj\Program.cs:1"),
+            (r"C:\proj\Program.cs", "1", ""),
+        );
+    }
+
+    /// A path may contain spaces, and a directory may be named with digits.
+    #[test]
+    fn split_exotic_locations() {
+        assert_eq!(
+            split_location(r"C:\My Projects\a.cs:7:2"),
+            (r"C:\My Projects\a.cs", "7", "2"),
+        );
+        assert_eq!(
+            split_location("v1:2/main.rs:3:4"),
+            ("v1:2/main.rs", "3", "4")
+        );
+    }
+
+    /// A location without line number is kept whole as the path.
+    #[test]
+    fn split_location_without_line() {
+        assert_eq!(split_location("src/main.rs"), ("src/main.rs", "", ""));
+        assert_eq!(split_location(r"C:\proj\a.cs"), (r"C:\proj\a.cs", "", ""));
     }
 }

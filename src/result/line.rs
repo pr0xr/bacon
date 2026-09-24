@@ -23,18 +23,23 @@ pub struct Line {
 
 impl Line {
     /// If the line is a title, get its message
-    pub fn title_message(&self) -> Option<&str> {
+    ///
+    /// A title is made of a kind (`error`, `warning`, `failure`, sometimes
+    /// with a code such as `error[E0308]`), a `: ` separator and the message.
+    /// How they're split between the strings of the line depends on the
+    /// analyzer, so everything after the kind is joined back together.
+    pub fn title_message(&self) -> Option<String> {
         match self.line_type {
             LineType::Title(_) => {
                 if let Some(content) = self.content.if_unstyled() {
-                    Some(content)
-                } else {
-                    self.content
-                        .strings
-                        .get(1)
-                        .map(|ts| ts.raw.as_str())
-                        .map(|s| s.trim_start_matches(|c: char| c.is_whitespace() || c == ':'))
+                    return Some(content.to_string());
                 }
+                let mut message = String::new();
+                for ts in self.content.strings.iter().skip(1) {
+                    message.push_str(&ts.raw);
+                }
+                let message = message.trim_start_matches(|c: char| c.is_whitespace() || c == ':');
+                Some(message.to_string())
             }
             _ => None,
         }
@@ -117,5 +122,74 @@ impl From<CommandOutputLine> for Line {
             content: col.content,
             line_type: LineType::Raw(col.origin),
         }
+    }
+}
+
+#[cfg(test)]
+mod title_message_tests {
+    use super::*;
+
+    fn title(
+        kind: Kind,
+        content: TLine,
+    ) -> Line {
+        Line {
+            item_idx: 0,
+            line_type: LineType::Title(kind),
+            content,
+        }
+    }
+
+    /// Titles built by the analyzers with the burp helpers have the `: `
+    /// separator in a string of its own, the message coming after it.
+    #[test]
+    fn message_of_a_burp_title() {
+        let line = title(
+            Kind::Error,
+            burp::error_line("Cannot implicitly convert type 'string' to 'int'"),
+        );
+        assert_eq!(
+            line.title_message().unwrap(),
+            "Cannot implicitly convert type 'string' to 'int'",
+        );
+    }
+
+    /// Cargo's own titles, as parsed from the tty output, have the separator
+    /// glued to the message.
+    #[test]
+    fn message_of_a_cargo_title() {
+        let mut content = TLine::default();
+        content
+            .strings
+            .push(TString::new("\u{1b}[1m\u{1b}[38;5;9m", "error[E0308]"));
+        content
+            .strings
+            .push(TString::new("\u{1b}[1m", ": mismatched types"));
+        let line = title(Kind::Error, content);
+        assert_eq!(line.title_message().unwrap(), "mismatched types");
+    }
+
+    /// A message split over several strings must be joined back.
+    #[test]
+    fn message_of_a_multi_string_title() {
+        let line = title(
+            Kind::Warning,
+            burp::warning_line_ts(&[
+                TString::new("", "unused variable: "),
+                TString::new("\u{1b}[1m", "`x`"),
+            ]),
+        );
+        assert_eq!(line.title_message().unwrap(), "unused variable: `x`");
+    }
+
+    /// A non title line has no message.
+    #[test]
+    fn no_message_on_a_normal_line() {
+        let line = Line {
+            item_idx: 0,
+            line_type: LineType::Normal,
+            content: burp::error_line("not a title"),
+        };
+        assert_eq!(line.title_message(), None);
     }
 }
