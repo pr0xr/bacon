@@ -120,11 +120,7 @@ Example configuration:
 
 ```TOML
 [jobs.build]
-command = [
-    "dotnet", "build",
-    "--nologo",
-    "-consoleLoggerParameters:NoSummary",
-]
+command = ["dotnet", "build", "--nologo"]
 need_stdout = true
 analyzer = "csharp"
 watch = ["."]
@@ -132,6 +128,11 @@ watch = ["."]
 
 The trailing `[/path/to/project.csproj]` that MSBuild appends to every
 diagnostic is removed from the item titles.
+
+MSBuild prints each diagnostic twice, once inline and once in the
+`Build FAILED.` summary, and no console logger option suppresses the repeat.
+The analyzer folds identical diagnostics into a single item, so multi-targeted
+projects (which repeat diagnostics once per target framework) are handled too.
 
 If your terminal doesn't get colors from the .NET CLI, add
 

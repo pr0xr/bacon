@@ -13,6 +13,7 @@ use {
     crate::*,
     anyhow::Result,
     lazy_regex::*,
+    rustc_hash::FxHashSet,
 };
 
 #[derive(Debug, Default)]
@@ -118,12 +119,32 @@ fn recognize_diagnostic(tline: &TLine) -> Option<Diagnostic> {
     recognize_located(&raw).or_else(|| recognize_unlocated(&raw))
 }
 
-/// Build a report from the output of `dotnet build` and friends
+/// Build a report from the output of `dotnet build` and friends.
+///
+/// MSBuild prints every diagnostic twice: once as the compiler emits it, and
+/// once more in the `Build FAILED.` / `Build succeeded.` summary. There is no
+/// console logger option that suppresses the repeat (neither `NoSummary` nor a
+/// lower verbosity does), and multi-targeted projects repeat diagnostics once
+/// per target framework too. So identical diagnostics are folded into one item.
 pub fn build_report(cmd_lines: &[CommandOutputLine]) -> Report {
     let mut items = ItemAccumulator::default();
     let mut last_is_blank = true;
+    let mut seen: FxHashSet<String> = FxHashSet::default();
     for cmd_line in cmd_lines {
         if let Some(diag) = recognize_diagnostic(&cmd_line.content) {
+            let key = format!(
+                "{:?}\u{1}{}\u{1}{}",
+                diag.kind,
+                diag.location.as_deref().unwrap_or_default(),
+                diag.message,
+            );
+            if !seen.insert(key) {
+                // a repeat of an already reported diagnostic: skip it, and make
+                // sure the summary noise following it isn't glued to some item
+                items.close_item();
+                last_is_blank = false;
+                continue;
+            }
             let title = match diag.kind {
                 Kind::Warning => burp::warning_line_ts(&[TString::new("", diag.message)]),
                 _ => burp::error_line(&diag.message),
@@ -201,5 +222,83 @@ mod csharp_analyzer_tests {
         assert!(diag("Build succeeded.").is_none());
         assert!(diag("    0 Warning(s)").is_none());
         assert!(diag("Time Elapsed 00:00:01.23").is_none());
+    }
+
+    /// Verbatim output of `dotnet build --nologo` (SDK 10.0.401) on a console
+    /// project with one unused local and one undefined symbol. Note that both
+    /// diagnostics appear twice: inline, then again in the summary.
+    const REAL_DOTNET_BUILD_OUTPUT: &str = r"  Determining projects to restore...
+  All projects are up-to-date for restore.
+C:\tmp\cstest\Program.cs(6,34): error CS0103: The name 'missingThing' does not exist in the current context [C:\tmp\cstest\cstest.csproj]
+C:\tmp\cstest\Program.cs(5,13): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\tmp\cstest\cstest.csproj]
+
+Build FAILED.
+
+C:\tmp\cstest\Program.cs(5,13): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\tmp\cstest\cstest.csproj]
+C:\tmp\cstest\Program.cs(6,34): error CS0103: The name 'missingThing' does not exist in the current context [C:\tmp\cstest\cstest.csproj]
+    1 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:03.45";
+
+    fn report_of(output: &str) -> Report {
+        let lines = output
+            .lines()
+            .map(|l| CommandOutputLine {
+                content: TLine::from_raw(l.to_string()),
+                origin: CommandStream::StdOut,
+            })
+            .collect::<Vec<_>>();
+        build_report(&lines)
+    }
+
+    #[test]
+    fn test_real_dotnet_build_output_stats() {
+        let report = report_of(REAL_DOTNET_BUILD_OUTPUT);
+        // the duplicated summary must not double the counts
+        assert_eq!(report.stats.errors, 1);
+        assert_eq!(report.stats.warnings, 1);
+    }
+
+    #[test]
+    fn test_real_dotnet_build_output_titles_and_locations() {
+        let report = report_of(REAL_DOTNET_BUILD_OUTPUT);
+        let rendered: Vec<String> = report
+            .lines
+            .iter()
+            .map(|line| line.content.to_raw())
+            .collect();
+        assert!(
+            rendered.iter().any(|l| l
+                == "error: CS0103: The name 'missingThing' does not exist in the current context"),
+            "missing error title in {rendered:#?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l == r"   --> C:\tmp\cstest\Program.cs:6:34"),
+            "missing error location in {rendered:#?}"
+        );
+        assert!(
+            rendered.iter().any(|l| l
+                == "warning: CS0219: The variable 'unused' is assigned but its value is never used"),
+            "missing warning title in {rendered:#?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l == r"   --> C:\tmp\cstest\Program.cs:5:13"),
+            "missing warning location in {rendered:#?}"
+        );
+    }
+
+    /// A multi-targeted project emits the same diagnostic once per TFM.
+    #[test]
+    fn test_multi_target_duplicates_are_folded() {
+        let report = report_of(
+            r"Lib.cs(3,9): warning CS0219: unused [C:\a\a.csproj::TargetFramework=net8.0]
+Lib.cs(3,9): warning CS0219: unused [C:\a\a.csproj::TargetFramework=net9.0]",
+        );
+        assert_eq!(report.stats.warnings, 1);
     }
 }
