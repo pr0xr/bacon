@@ -134,6 +134,32 @@ MSBuild prints each diagnostic twice, once inline and once in the
 The analyzer folds identical diagnostics into a single item, so multi-targeted
 projects (which repeat diagnostics once per target framework) are handled too.
 
+## dotnet test
+
+**Status: <span style="background-color:orange;color:white;padding:3px">young</span>**
+
+Test failures use a different format, produced by the VSTest console logger and
+therefore shared by xUnit, NUnit and MSTest:
+
+```TOML
+[jobs.test]
+command = ["dotnet", "test", "--nologo"]
+need_stdout = true
+analyzer = "csharp"
+watch = ["."]
+```
+
+Each failure becomes an item, located on the first stack frame that belongs to
+your own code: frameworks such as MSTest push several of their own frames on
+top of the trace, and those are skipped.
+
+The .NET CLI localizes its output. If your system isn't in English, the
+keywords the analyzer looks for won't match, so pin the language:
+
+```TOML
+env.DOTNET_CLI_UI_LANGUAGE = "en"
+```
+
 If your terminal doesn't get colors from the .NET CLI, add
 
 ```TOML
